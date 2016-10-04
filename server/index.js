@@ -16,9 +16,13 @@ var redis = require("redis"),
 
 var path = require('path');
 
+var fs = require('fs');
+
 const logger = require('./logger');
 const argv = require('minimist')(process.argv.slice(2));
 const isDev = process.env.NODE_ENV !== 'production';
+
+const isFakeDataMode = false; //isDev; // for now
 
 // Get the intended port number, use port 8000 if not provided
 const port = argv.port || process.env.PORT || 8000;
@@ -64,37 +68,69 @@ io.on('connection', function (socket) {
   })
 });
 
+function fetchFakeLocalData() 
+{
+  logger.error("looping");
+  allClients.forEach(function (socket) 
+  {
+    if (socket != null && socket.connected == true) {
+      var i = Math.round((Math.random() * 2));
+      logger.error("polling from " + i);
+      fs.readFile('server/fake_data/events' + i + '.json', 'utf8', function (err, data) 
+      {
+        var stripped_data = stripData(JSON.parse(data));
+        //console.log(data);
+        redis_client.get('connected_users', function (err, count) 
+        {
+          if (!err && count != null) {
+            socket.volatile.json.emit('github', { data: stripped_data, connected_users: count });
+          }
+          else {
+            logger.error(err.message);
+          }
+        });
+      });
+    }
+  });
+}
+
 // Function to get events from GitHub API
 function fetchDataFromGithub(){
-  var options = {
-    url: 'https://api.github.com/events',
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (Linux; Android 5.1.1; Nexus 5 Build/LMY48B; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/43.0.2357.65 Mobile Safari/537.36',
-      'Authorization': 'token ' + process.env.GITHUB_OAUTH_KEY
-    }
-  };
-  request(options, function (error, response, body) {
-    if (!error && response.statusCode == 200) {
-      var data = JSON.parse(body);
-      var stripedData = stripData(data);  // Keep only useful keys
-      allClients.forEach(function(socket){
-        if(socket != null && socket.connected == true){
-            redis_client.get('connected_users', function(err, count) {
-                if(!err && count != null){
-                    socket.volatile.json.emit('github', {data: stripedData, connected_users: count});
-                }else{
-                  logger.error(err.message);
-                }
-            });
-        }
-      });
+  if (isFakeDataMode) {
+    fetchFakeLocalData();
+  } 
+  else {
+    var options = {
+      url: 'https://api.github.com/events',
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Linux; Android 5.1.1; Nexus 5 Build/LMY48B; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/43.0.2357.65 Mobile Safari/537.36',
+        'Authorization': 'token ' + process.env.GITHUB_OAUTH_KEY
+      }
+    };
+    request(options, function (error, response, body) {
+      if (!error && response.statusCode == 200) {
+        var data = JSON.parse(body);
+        var stripedData = stripData(data);  // Keep only useful keys
+        allClients.forEach(function(socket){
+          if(socket != null && socket.connected == true){
+              redis_client.get('connected_users', function(err, count) {
+                  if(!err && count != null){
+                      socket.volatile.json.emit('github', {data: stripedData, connected_users: count});
+                  }else{
+                    logger.error(err.message);
+                  }
+              });
+          }
+        });
 
-    }else{
-      logger.error("GitHub status code: " + response.statusCode);
-    }
-  })
+      }else{
+        logger.error("GitHub status code: " + response.statusCode);
+      }
+    })
+  }
   setTimeout(fetchDataFromGithub, 2000);
-}
+} 
+
 setTimeout(fetchDataFromGithub, 2000);
 
 
